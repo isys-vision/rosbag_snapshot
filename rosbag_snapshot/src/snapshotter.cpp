@@ -35,6 +35,7 @@
 #include <string>
 #include <time.h>
 #include <vector>
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/scope_exit.hpp>
 #include <boost/thread/xtime.hpp>
@@ -349,12 +350,12 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
     ROS_INFO("Writing snapshot to %s", req.filename.c_str());
 
     // Setting compression type
-    if (options_.compression_ == "LZ4")
+    if (boost::iequals(options_.compression_, "LZ4"))
     {
       ROS_INFO("Bag compression type LZ4");
       bag.setCompression(rosbag::compression::LZ4);
     }
-    else if (options_.compression_ == "BZ2")
+    else if (boost::iequals(options_.compression_, "BZ2"))
     {
       ROS_INFO("Bag compression type BZ2");
       bag.setCompression(rosbag::compression::BZ2);
