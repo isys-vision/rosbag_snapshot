@@ -379,6 +379,7 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
   {
     res.success = false;
     res.message = string("failed to write bag: ") + err.what();
+    return false;
   }
   return true;
 }
