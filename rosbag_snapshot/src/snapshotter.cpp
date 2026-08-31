@@ -265,7 +265,7 @@ void Snapshotter::fixTopicOptions(SnapshotterTopicOptions& options)
   if (options.memory_limit_ == SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT)
     options.memory_limit_ = options_.default_memory_limit_;
   if (options.count_limit_ == SnapshotterTopicOptions::INHERIT_COUNT_LIMIT)
-    options.count_limit_ = options_.default_memory_limit_;
+    options.count_limit_ = options_.default_count_limit_;
 }
 
 bool Snapshotter::postfixFilename(string& file)
