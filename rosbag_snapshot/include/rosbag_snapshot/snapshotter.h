@@ -129,10 +129,8 @@ struct ROSBAG_DECL SnapshotterOptions
  */
 struct ROSBAG_DECL SnapshotMessage
 {
-  SnapshotMessage(topic_tools::ShapeShifter::ConstPtr _msg, boost::shared_ptr<ros::M_string> _connection_header,
-                  ros::Time _time);
+  SnapshotMessage(topic_tools::ShapeShifter::ConstPtr _msg, ros::Time _time);
   topic_tools::ShapeShifter::ConstPtr msg;
-  boost::shared_ptr<ros::M_string> connection_header;
   // ROS time when messaged arrived (does not use header stamp)
   ros::Time time;
 };
@@ -156,6 +154,7 @@ private:
   queue_t queue_;
   // Subscriber to the callback which uses this queue
   boost::shared_ptr<ros::Subscriber> sub_;
+  boost::shared_ptr<ros::M_string> connection_header_;
 
 public:
   explicit MessageQueue(SnapshotterTopicOptions const& options);
@@ -177,6 +176,10 @@ public:
 
   // Return the total message size including the meta-information
   int64_t getMessageSize(SnapshotMessage const& msg) const;
+
+  boost::shared_ptr<ros::M_string> const& getConnectionHeader() const;
+  void setConnectionHeader(boost::shared_ptr<ros::M_string> const& header);
+  int64_t getConnectionHeaderSize() const;
 
 private:
   // Internal push whitch does not obtain lock

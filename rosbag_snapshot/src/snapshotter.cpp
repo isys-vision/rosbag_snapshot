@@ -92,15 +92,20 @@ SnapshotterClientOptions::SnapshotterClientOptions() : action_(SnapshotterClient
 {
 }
 
-SnapshotMessage::SnapshotMessage(topic_tools::ShapeShifter::ConstPtr _msg,
-                                 boost::shared_ptr<ros::M_string> _connection_header, Time _time)
-  : msg(_msg), connection_header(_connection_header), time(_time)
+SnapshotMessage::SnapshotMessage(topic_tools::ShapeShifter::ConstPtr _msg, Time _time)
+  : msg(_msg), time(_time)
 {
 }
 
 MessageQueue::MessageQueue(SnapshotterTopicOptions const& options) : options_(options), size_(0)
 {
 }
+
+boost::shared_ptr<ros::M_string> const& MessageQueue::getConnectionHeader() const
+{
+  return connection_header_;
+}
+
 
 void MessageQueue::setSubscriber(shared_ptr<ros::Subscriber> sub)
 {
@@ -127,7 +132,8 @@ void MessageQueue::clear()
 void MessageQueue::_clear()
 {
   queue_.clear();
-  size_ = 0;
+
+  size_ = getConnectionHeaderSize();
 }
 
 ros::Duration MessageQueue::duration() const
@@ -197,11 +203,34 @@ SnapshotMessage MessageQueue::pop()
 int64_t MessageQueue::getMessageSize(SnapshotMessage const& snapshot_msg) const
 {
   return snapshot_msg.msg->size() +
-         snapshot_msg.connection_header->size() +
-         snapshot_msg.msg->getDataType().size() +
-         snapshot_msg.msg->getMD5Sum().size() +
-         snapshot_msg.msg->getMessageDefinition().size() +
          sizeof(SnapshotMessage);
+}
+
+int64_t MessageQueue::getConnectionHeaderSize() const
+{
+  if (!connection_header_)
+    return 0;
+
+  int64_t size = sizeof(*connection_header_);
+
+  for (const auto& field : *connection_header_)
+  {
+    size += field.first.size();
+    size += field.second.size();
+  }
+
+  return size;
+}
+
+void MessageQueue::setConnectionHeader(
+    boost::shared_ptr<ros::M_string> const& header)
+{
+  if (connection_header_ || !header)
+    return;
+
+  connection_header_ = header;
+
+  size_ += getConnectionHeaderSize();
 }
 
 void MessageQueue::_push(SnapshotMessage const& _out)
@@ -303,8 +332,10 @@ void Snapshotter::topicCB(const ros::MessageEvent<topic_tools::ShapeShifter cons
     }
   }
 
+  queue->setConnectionHeader(msg_event.getConnectionHeaderPtr());
+
   // Pack message and metadata into SnapshotMessage holder
-  SnapshotMessage out(msg_event.getMessage(), msg_event.getConnectionHeaderPtr(), msg_event.getReceiptTime());
+  SnapshotMessage out(msg_event.getMessage(), msg_event.getReceiptTime());
   queue->push(out);
 }
 
@@ -372,7 +403,11 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
     for (MessageQueue::range_t::first_type msg_it = range.first; msg_it != range.second; ++msg_it)
     {
       SnapshotMessage const& msg = *msg_it;
-      bag.write(topic, msg.time, msg.msg, msg.connection_header);
+      bag.write(
+          topic,
+          msg.time,
+          msg.msg,
+          message_queue.getConnectionHeader());
     }
   }
   catch (rosbag::BagException const& err)
