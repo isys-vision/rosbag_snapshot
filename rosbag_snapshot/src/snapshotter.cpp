@@ -92,8 +92,8 @@ SnapshotterClientOptions::SnapshotterClientOptions() : action_(SnapshotterClient
 {
 }
 
-SnapshotMessage::SnapshotMessage(topic_tools::ShapeShifter::ConstPtr _msg, Time _time)
-  : msg(_msg), time(_time)
+SnapshotMessage::SnapshotMessage(SerializedPayload const& _msg, Time _time)
+  : payload(_msg), time(_time)
 {
 }
 
@@ -202,8 +202,7 @@ SnapshotMessage MessageQueue::pop()
 
 int64_t MessageQueue::getMessageSize(SnapshotMessage const& snapshot_msg) const
 {
-  return snapshot_msg.msg->size() +
-         sizeof(SnapshotMessage);
+  return snapshot_msg.payload.vec.size() + sizeof(SnapshotMessage);
 }
 
 int64_t MessageQueue::getConnectionHeaderSize() const
@@ -235,7 +234,7 @@ void MessageQueue::setConnectionHeader(
 
 void MessageQueue::_push(SnapshotMessage const& _out)
 {
-  int32_t size = _out.msg->size();
+  int32_t size = _out.payload.vec.size();
   // If message cannot be added without violating limits, it must be dropped
   if (!preparePush(size, _out.time))
     return;
@@ -334,9 +333,14 @@ void Snapshotter::topicCB(const ros::MessageEvent<topic_tools::ShapeShifter cons
 
   queue->setConnectionHeader(msg_event.getConnectionHeaderPtr());
 
-  // Pack message and metadata into SnapshotMessage holder
-  SnapshotMessage out(msg_event.getMessage(), msg_event.getReceiptTime());
-  queue->push(out);
+  topic_tools::ShapeShifter::ConstPtr const& ss = msg_event.getMessage();
+  SerializedPayload payload;
+  payload.vec.resize(ss->size());
+  ros::serialization::OStream stream(payload.vec.data(), ss->size());
+  ss->write(stream);   // copies the wire bytes only — no md5/datatype/def touched
+
+  queue->push(SnapshotMessage(payload, msg_event.getReceiptTime()));
+  // ss goes out of scope here and its duplicated metadata strings are freed
 }
 
 void Snapshotter::subscribe(string const& topic, boost::shared_ptr<MessageQueue> queue)
@@ -406,7 +410,7 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
       bag.write(
           topic,
           msg.time,
-          msg.msg,
+          msg.payload,
           message_queue.getConnectionHeader());
     }
   }
