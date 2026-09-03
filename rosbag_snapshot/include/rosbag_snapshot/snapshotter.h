@@ -129,8 +129,7 @@ struct ROSBAG_DECL SnapshotterOptions
  */
 struct SerializedPayload
 {
-  boost::shared_ptr<uint8_t[]> buf;
-  uint32_t len = 0;
+  std::vector<uint8_t> vec;
 };
 
 
@@ -319,9 +318,9 @@ template<> struct Serializer<rosbag_snapshot::SerializedPayload>
 {
   template<typename Stream>
   inline static void write(Stream& stream, rosbag_snapshot::SerializedPayload const& m)
-  { memcpy(stream.advance(m.len), m.buf.get(), m.len); }
+  { memcpy(stream.advance(m.vec.size()), m.vec.data(), m.vec.size()); }
   inline static uint32_t serializedLength(rosbag_snapshot::SerializedPayload const& m)
-  { return m.len; }
+  { return m.vec.size(); }
 };
 }}
 
