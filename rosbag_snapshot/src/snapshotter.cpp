@@ -35,6 +35,7 @@
 #include <string>
 #include <time.h>
 #include <vector>
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/scope_exit.hpp>
 #include <boost/thread/xtime.hpp>
@@ -91,15 +92,20 @@ SnapshotterClientOptions::SnapshotterClientOptions() : action_(SnapshotterClient
 {
 }
 
-SnapshotMessage::SnapshotMessage(topic_tools::ShapeShifter::ConstPtr _msg,
-                                 boost::shared_ptr<ros::M_string> _connection_header, Time _time)
-  : msg(_msg), connection_header(_connection_header), time(_time)
+SnapshotMessage::SnapshotMessage(SerializedPayload const& _msg, Time _time)
+  : payload(_msg), time(_time)
 {
 }
 
 MessageQueue::MessageQueue(SnapshotterTopicOptions const& options) : options_(options), size_(0)
 {
 }
+
+boost::shared_ptr<ros::M_string> const& MessageQueue::getConnectionHeader() const
+{
+  return connection_header_;
+}
+
 
 void MessageQueue::setSubscriber(shared_ptr<ros::Subscriber> sub)
 {
@@ -126,7 +132,8 @@ void MessageQueue::clear()
 void MessageQueue::_clear()
 {
   queue_.clear();
-  size_ = 0;
+
+  size_ = getConnectionHeaderSize();
 }
 
 ros::Duration MessageQueue::duration() const
@@ -195,17 +202,39 @@ SnapshotMessage MessageQueue::pop()
 
 int64_t MessageQueue::getMessageSize(SnapshotMessage const& snapshot_msg) const
 {
-  return snapshot_msg.msg->size() +
-         snapshot_msg.connection_header->size() +
-         snapshot_msg.msg->getDataType().size() +
-         snapshot_msg.msg->getMD5Sum().size() +
-         snapshot_msg.msg->getMessageDefinition().size() +
-         sizeof(SnapshotMessage);
+  return snapshot_msg.payload.vec.size() + sizeof(SnapshotMessage);
+}
+
+int64_t MessageQueue::getConnectionHeaderSize() const
+{
+  if (!connection_header_)
+    return 0;
+
+  int64_t size = sizeof(*connection_header_);
+
+  for (const auto& field : *connection_header_)
+  {
+    size += field.first.size();
+    size += field.second.size();
+  }
+
+  return size;
+}
+
+void MessageQueue::setConnectionHeader(
+    boost::shared_ptr<ros::M_string> const& header)
+{
+  if (connection_header_ || !header)
+    return;
+
+  connection_header_ = header;
+
+  size_ += getConnectionHeaderSize();
 }
 
 void MessageQueue::_push(SnapshotMessage const& _out)
 {
-  int32_t size = _out.msg->size();
+  int32_t size = _out.payload.vec.size();
   // If message cannot be added without violating limits, it must be dropped
   if (!preparePush(size, _out.time))
     return;
@@ -264,7 +293,7 @@ void Snapshotter::fixTopicOptions(SnapshotterTopicOptions& options)
   if (options.memory_limit_ == SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT)
     options.memory_limit_ = options_.default_memory_limit_;
   if (options.count_limit_ == SnapshotterTopicOptions::INHERIT_COUNT_LIMIT)
-    options.count_limit_ = options_.default_memory_limit_;
+    options.count_limit_ = options_.default_count_limit_;
 }
 
 bool Snapshotter::postfixFilename(string& file)
@@ -302,9 +331,16 @@ void Snapshotter::topicCB(const ros::MessageEvent<topic_tools::ShapeShifter cons
     }
   }
 
-  // Pack message and metadata into SnapshotMessage holder
-  SnapshotMessage out(msg_event.getMessage(), msg_event.getConnectionHeaderPtr(), msg_event.getReceiptTime());
-  queue->push(out);
+  queue->setConnectionHeader(msg_event.getConnectionHeaderPtr());
+
+  topic_tools::ShapeShifter::ConstPtr const& ss = msg_event.getMessage();
+  SerializedPayload payload;
+  payload.vec.resize(ss->size());
+  ros::serialization::OStream stream(payload.vec.data(), ss->size());
+  ss->write(stream);   // copies the wire bytes only — no md5/datatype/def touched
+
+  queue->push(SnapshotMessage(payload, msg_event.getReceiptTime()));
+  // ss goes out of scope here and its duplicated metadata strings are freed
 }
 
 void Snapshotter::subscribe(string const& topic, boost::shared_ptr<MessageQueue> queue)
@@ -349,12 +385,12 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
     ROS_INFO("Writing snapshot to %s", req.filename.c_str());
 
     // Setting compression type
-    if (options_.compression_ == "LZ4")
+    if (boost::iequals(options_.compression_, "LZ4"))
     {
       ROS_INFO("Bag compression type LZ4");
       bag.setCompression(rosbag::compression::LZ4);
     }
-    else if (options_.compression_ == "BZ2")
+    else if (boost::iequals(options_.compression_, "BZ2"))
     {
       ROS_INFO("Bag compression type BZ2");
       bag.setCompression(rosbag::compression::BZ2);
@@ -371,13 +407,18 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
     for (MessageQueue::range_t::first_type msg_it = range.first; msg_it != range.second; ++msg_it)
     {
       SnapshotMessage const& msg = *msg_it;
-      bag.write(topic, msg.time, msg.msg, msg.connection_header);
+      bag.write(
+          topic,
+          msg.time,
+          msg.payload,
+          message_queue.getConnectionHeader());
     }
   }
   catch (rosbag::BagException const& err)
   {
     res.success = false;
     res.message = string("failed to write bag: ") + err.what();
+    return false;
   }
   return true;
 }

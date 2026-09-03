@@ -124,15 +124,22 @@ struct ROSBAG_DECL SnapshotterOptions
                 int32_t count_limit = SnapshotterTopicOptions::INHERIT_COUNT_LIMIT);
 };
 
+/**
+ * SnapshotMessage now holds bytes, not a ShapeShifter
+ */
+struct SerializedPayload
+{
+  std::vector<uint8_t> vec;
+};
+
+
 /* Stores a buffered message of an ambiguous type and it's associated metadata (time of arrival, connection data),
  * for later writing to disk
  */
 struct ROSBAG_DECL SnapshotMessage
 {
-  SnapshotMessage(topic_tools::ShapeShifter::ConstPtr _msg, boost::shared_ptr<ros::M_string> _connection_header,
-                  ros::Time _time);
-  topic_tools::ShapeShifter::ConstPtr msg;
-  boost::shared_ptr<ros::M_string> connection_header;
+  SnapshotMessage(SerializedPayload const& _payload, ros::Time _time);
+  SerializedPayload payload;
   // ROS time when messaged arrived (does not use header stamp)
   ros::Time time;
 };
@@ -156,6 +163,7 @@ private:
   queue_t queue_;
   // Subscriber to the callback which uses this queue
   boost::shared_ptr<ros::Subscriber> sub_;
+  boost::shared_ptr<ros::M_string> connection_header_;
 
 public:
   explicit MessageQueue(SnapshotterTopicOptions const& options);
@@ -177,6 +185,10 @@ public:
 
   // Return the total message size including the meta-information
   int64_t getMessageSize(SnapshotMessage const& msg) const;
+
+  boost::shared_ptr<ros::M_string> const& getConnectionHeader() const;
+  void setConnectionHeader(boost::shared_ptr<ros::M_string> const& header);
+  int64_t getConnectionHeaderSize() const;
 
 private:
   // Internal push whitch does not obtain lock
@@ -286,5 +298,30 @@ private:
 };
 
 }  // namespace rosbag_snapshot
+
+
+namespace ros { namespace message_traits {
+// Wildcard traits, same trick topic_tools::ShapeShifter uses, so Bag::write<T>
+// compiles. Values are never read at runtime once a topic's connection_info
+// exists, and MessageQueue::connection_header_ supplies the real ones anyway.
+template<> struct MD5Sum<rosbag_snapshot::SerializedPayload>
+{ static const char* value(const rosbag_snapshot::SerializedPayload&) { return "*"; } };
+template<> struct DataType<rosbag_snapshot::SerializedPayload>
+{ static const char* value(const rosbag_snapshot::SerializedPayload&) { return "*"; } };
+template<> struct Definition<rosbag_snapshot::SerializedPayload>
+{ static const char* value(const rosbag_snapshot::SerializedPayload&) { return ""; } };
+}}
+
+
+namespace ros { namespace serialization {
+template<> struct Serializer<rosbag_snapshot::SerializedPayload>
+{
+  template<typename Stream>
+  inline static void write(Stream& stream, rosbag_snapshot::SerializedPayload const& m)
+  { memcpy(stream.advance(m.vec.size()), m.vec.data(), m.vec.size()); }
+  inline static uint32_t serializedLength(rosbag_snapshot::SerializedPayload const& m)
+  { return m.vec.size(); }
+};
+}}
 
 #endif  // ROSBAG_SNAPSHOT_SNAPSHOTTER_H
