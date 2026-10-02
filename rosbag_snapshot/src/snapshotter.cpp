@@ -34,7 +34,6 @@
 #include <queue>
 #include <string>
 #include <time.h>
-#include <vector>
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/scope_exit.hpp>
@@ -188,10 +187,6 @@ bool MessageQueue::preparePush(int32_t size, ros::Time const& time)
 
   return true;
 }
-void MessageQueue::push(SnapshotMessage const& _out)
-{
-  push(SnapshotMessage(_out), boost::shared_ptr<ros::M_string>());
-}
 
 void MessageQueue::push(SnapshotMessage _out, boost::shared_ptr<ros::M_string> const& header)
 {
@@ -213,7 +208,7 @@ SnapshotMessage MessageQueue::pop()
 
 int64_t MessageQueue::getMessageSize(SnapshotMessage const& snapshot_msg) const
 {
-  return snapshot_msg.payload.vec.size() + sizeof(SnapshotMessage);
+  return snapshot_msg.payload.size() + sizeof(SnapshotMessage);
 }
 
 int64_t MessageQueue::getConnectionHeaderSize() const
@@ -245,7 +240,7 @@ void MessageQueue::_setConnectionHeader(boost::shared_ptr<ros::M_string> const& 
 
 void MessageQueue::_push(SnapshotMessage&& _out)
 {
-  int32_t size = _out.payload.vec.size();
+  int32_t size = _out.payload.size();
   // If message cannot be added without violating limits, it must be dropped
   if (!preparePush(size, _out.time))
     return;
@@ -361,9 +356,10 @@ void Snapshotter::topicCB(const ros::MessageEvent<topic_tools::ShapeShifter cons
   }
 
   SerializedPayload payload;
-  payload.vec.resize(ss->size());
-  ros::serialization::OStream stream(payload.vec.data(), ss->size());
-  ss->write(stream);   // copies the wire bytes only — no md5/datatype/def touched
+  payload.size_ = ss->size();
+  payload.data = std::unique_ptr<uint8_t[]>(new uint8_t[payload.size_]);
+  // copies the wire bytes only — no md5/datatype/def touched
+  ros::serialization::OStream stream(payload.data.get(), payload.size_);
 
   queue->push(SnapshotMessage(std::move(payload), msg_event.getReceiptTime()), header);
   // ss goes out of scope here and its duplicated metadata strings are freed

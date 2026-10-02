@@ -46,8 +46,10 @@
 #include <rosbag/bag.h>
 #include <rosbag/macros.h>
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -125,43 +127,20 @@ struct ROSBAG_DECL SnapshotterOptions
 };
 
 /**
- * Allocator adaptor that default-initializes trivially constructible elements instead of value-initializing
- * (zero-filling) them. Used for the payload buffer so that vector::resize() does not write zeros over memory
- * that is overwritten with the message bytes right afterwards.
- */
-template <typename T, typename A = std::allocator<T> >
-class default_init_allocator : public A
-{
-  typedef std::allocator_traits<A> a_t;
-
-public:
-  template <typename U>
-  struct rebind
-  {
-    typedef default_init_allocator<U, typename a_t::template rebind_alloc<U> > other;
-  };
-
-  using A::A;
-
-  template <typename U>
-  void construct(U* ptr) noexcept(std::is_nothrow_default_constructible<U>::value)
-  {
-    ::new (static_cast<void*>(ptr)) U;
-  }
-
-  template <typename U, typename... Args>
-  void construct(U* ptr, Args&&... args)
-  {
-    a_t::construct(static_cast<A&>(*this), ptr, std::forward<Args>(args)...);
-  }
-};
-
-/**
  * SnapshotMessage now holds bytes, not a ShapeShifter
+ *
+ * The payload buffer is allocated uninitialized into a unique_ptr instead a std::vector:
+ * the buffer is immediately overwritten with the message wire bytes in Snapshotter::topicCB,
+ * so vector::resize()'s zero-fill was pure overhead.
+ * Note: as a result, SerializedPayload is move-only.
  */
 struct SerializedPayload
 {
-  std::vector<uint8_t, default_init_allocator<uint8_t> > vec;
+  // Number of payload bytes (replaces the old vec.size()).
+  uint32_t size() const { return size_; }
+
+  std::unique_ptr<uint8_t[]> data;
+  uint32_t size_ = 0;
 };
 
 
@@ -356,9 +335,9 @@ template<> struct Serializer<rosbag_snapshot::SerializedPayload>
 {
   template<typename Stream>
   inline static void write(Stream& stream, rosbag_snapshot::SerializedPayload const& m)
-  { memcpy(stream.advance(m.vec.size()), m.vec.data(), m.vec.size()); }
+  { memcpy(stream.advance(m.size()), m.data.get(), m.size()); }
   inline static uint32_t serializedLength(rosbag_snapshot::SerializedPayload const& m)
-  { return m.vec.size(); }
+  { return m.size(); }
 };
 }}
 
