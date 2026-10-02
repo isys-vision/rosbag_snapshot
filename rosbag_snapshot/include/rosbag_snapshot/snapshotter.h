@@ -125,11 +125,43 @@ struct ROSBAG_DECL SnapshotterOptions
 };
 
 /**
+ * Allocator adaptor that default-initializes trivially constructible elements instead of value-initializing
+ * (zero-filling) them. Used for the payload buffer so that vector::resize() does not write zeros over memory
+ * that is overwritten with the message bytes right afterwards.
+ */
+template <typename T, typename A = std::allocator<T> >
+class default_init_allocator : public A
+{
+  typedef std::allocator_traits<A> a_t;
+
+public:
+  template <typename U>
+  struct rebind
+  {
+    typedef default_init_allocator<U, typename a_t::template rebind_alloc<U> > other;
+  };
+
+  using A::A;
+
+  template <typename U>
+  void construct(U* ptr) noexcept(std::is_nothrow_default_constructible<U>::value)
+  {
+    ::new (static_cast<void*>(ptr)) U;
+  }
+
+  template <typename U, typename... Args>
+  void construct(U* ptr, Args&&... args)
+  {
+    a_t::construct(static_cast<A&>(*this), ptr, std::forward<Args>(args)...);
+  }
+};
+
+/**
  * SnapshotMessage now holds bytes, not a ShapeShifter
  */
 struct SerializedPayload
 {
-  std::vector<uint8_t> vec;
+  std::vector<uint8_t, default_init_allocator<uint8_t> > vec;
 };
 
 
