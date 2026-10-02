@@ -34,7 +34,6 @@
 #ifndef ROSBAG_SNAPSHOT_SNAPSHOTTER_H
 #define ROSBAG_SNAPSHOT_SNAPSHOTTER_H
 
-#include <boost/atomic.hpp>
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/shared_mutex.hpp>
 #include <ros/ros.h>
@@ -46,6 +45,7 @@
 #include <rosbag_snapshot_msgs/SnapshotStatus.h>
 #include <rosbag/bag.h>
 #include <rosbag/macros.h>
+#include <atomic>
 #include <deque>
 #include <map>
 #include <string>
@@ -138,7 +138,7 @@ struct SerializedPayload
  */
 struct ROSBAG_DECL SnapshotMessage
 {
-  SnapshotMessage(SerializedPayload const& _payload, ros::Time _time);
+  SnapshotMessage(SerializedPayload _payload, ros::Time _time);
   SerializedPayload payload;
   // ROS time when messaged arrived (does not use header stamp)
   ros::Time time;
@@ -164,6 +164,7 @@ private:
   // Subscriber to the callback which uses this queue
   boost::shared_ptr<ros::Subscriber> sub_;
   boost::shared_ptr<ros::M_string> connection_header_;
+  std::atomic<bool> has_connection_header_;
 
 public:
   explicit MessageQueue(SnapshotterTopicOptions const& options);
@@ -187,12 +188,17 @@ public:
   int64_t getMessageSize(SnapshotMessage const& msg) const;
 
   boost::shared_ptr<ros::M_string> const& getConnectionHeader() const;
-  void setConnectionHeader(boost::shared_ptr<ros::M_string> const& header);
+  bool hasConnectionHeader() const;
   int64_t getConnectionHeaderSize() const;
+
+  // Push a message and, if the queue has none yet, its connection header under a single lock acquisition
+  void push(SnapshotMessage msg, boost::shared_ptr<ros::M_string> const& header);
 
 private:
   // Internal push whitch does not obtain lock
-  void _push(SnapshotMessage const& msg);
+  void _push(SnapshotMessage&& msg);
+  // Internal: stores the connection header once; caller must hold the lock
+  void _setConnectionHeader(boost::shared_ptr<ros::M_string> const& header);
   // Internal pop which does not obtain lock
   SnapshotMessage _pop();
   // Internal clear which does not obtain lock
