@@ -64,14 +64,14 @@ bool parseOptions(po::variables_map& vm, int argc, char** argv)
   // clang-format off
   desc.add_options()
     ("help,h", "produce help message")
-    ("trigger-write,t", "Write buffer of selected topcis to a bag file")
+    ("trigger-write,t", "Write buffer of selected topics to a bag file")
     ("pause,p", "Stop buffering new messages until resumed or write is triggered")
     ("resume,r", "Resume buffering new messages, writing over older messages as needed")
     ("all,a", "Record all topics")
     ("no-clear,n", "Flag to explicitly NOT clear the buffer after writing to a bag.")
     ("size,s", po::value<double>()->default_value(-1),
      "Maximum memory per topic to use in buffering in MB. Default: no limit")
-    ("count,c", po::value<int32_t>()->default_value(-1),
+    ("count", po::value<int32_t>()->default_value(-1),
      "Maximum number of messages per topic to use when buffering. Default: no limit")
     ("duration,d", po::value<double>()->default_value(30.0),
      "Maximum difference between newest and oldest buffered message per topic in seconds. Default: 30")
