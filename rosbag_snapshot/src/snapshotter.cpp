@@ -92,12 +92,13 @@ SnapshotterClientOptions::SnapshotterClientOptions() : action_(SnapshotterClient
 {
 }
 
-SnapshotMessage::SnapshotMessage(SerializedPayload const& _msg, Time _time)
-  : payload(_msg), time(_time)
+SnapshotMessage::SnapshotMessage(SerializedPayload _msg, Time _time)
+  : payload(std::move(_msg)), time(_time)
 {
 }
 
-MessageQueue::MessageQueue(SnapshotterTopicOptions const& options) : options_(options), size_(0)
+MessageQueue::MessageQueue(SnapshotterTopicOptions const& options)
+  : options_(options), size_(0), has_connection_header_(false)
 {
 }
 
@@ -106,6 +107,10 @@ boost::shared_ptr<ros::M_string> const& MessageQueue::getConnectionHeader() cons
   return connection_header_;
 }
 
+bool MessageQueue::hasConnectionHeader() const
+{
+  return has_connection_header_.load(std::memory_order_acquire);
+}
 
 void MessageQueue::setSubscriber(shared_ptr<ros::Subscriber> sub)
 {
@@ -185,13 +190,19 @@ bool MessageQueue::preparePush(int32_t size, ros::Time const& time)
 }
 void MessageQueue::push(SnapshotMessage const& _out)
 {
+  push(SnapshotMessage(_out), boost::shared_ptr<ros::M_string>());
+}
+
+void MessageQueue::push(SnapshotMessage _out, boost::shared_ptr<ros::M_string> const& header)
+{
   boost::mutex::scoped_try_lock l(lock);
   if (!l.owns_lock())
   {
     ROS_ERROR("Failed to lock. Time %f", _out.time.toSec());
     return;
   }
-  _push(_out);
+  _setConnectionHeader(header);
+  _push(std::move(_out));
 }
 
 SnapshotMessage MessageQueue::pop()
@@ -220,32 +231,36 @@ int64_t MessageQueue::getConnectionHeaderSize() const
 
   return size;
 }
-
-void MessageQueue::setConnectionHeader(
-    boost::shared_ptr<ros::M_string> const& header)
+// Caller must hold the queue lock
+void MessageQueue::_setConnectionHeader(boost::shared_ptr<ros::M_string> const& header)
 {
   if (connection_header_ || !header)
     return;
 
   connection_header_ = header;
+  has_connection_header_.store(true, std::memory_order_release);
 
   size_ += getConnectionHeaderSize();
 }
 
-void MessageQueue::_push(SnapshotMessage const& _out)
+void MessageQueue::_push(SnapshotMessage&& _out)
 {
   int32_t size = _out.payload.vec.size();
   // If message cannot be added without violating limits, it must be dropped
   if (!preparePush(size, _out.time))
     return;
-  queue_.push_back(_out);
+
+  // Compute the size first: the payload is moved out of _out below
+  int64_t const msg_size = getMessageSize(_out);
+  queue_.push_back(std::move(_out));
+
   // Add size of new message to running count to maintain correctness
-  size_ += getMessageSize(_out);
+  size_ += msg_size;
 }
 
 SnapshotMessage MessageQueue::_pop()
 {
-  SnapshotMessage tmp = queue_.front();
+  SnapshotMessage tmp = std::move(queue_.front());
   queue_.pop_front();
   //  Remove size of popped message to maintain correctness of size_
   size_ -= getMessageSize(tmp);
@@ -331,15 +346,26 @@ void Snapshotter::topicCB(const ros::MessageEvent<topic_tools::ShapeShifter cons
     }
   }
 
-  queue->setConnectionHeader(msg_event.getConnectionHeaderPtr());
-
   topic_tools::ShapeShifter::ConstPtr const& ss = msg_event.getMessage();
+
+  // The connection header is stored once per queue. The transport normally supplies it; if it is missing
+  // (e.g. intra-process publisher) build the minimal fields rosbag needs from the ShapeShifter, but only
+  // until the queue has a header, so the definition string is not copied for every message.
+  boost::shared_ptr<ros::M_string> header = msg_event.getConnectionHeaderPtr();
+  if (!header && !queue->hasConnectionHeader())
+  {
+    header = boost::make_shared<ros::M_string>();
+    (*header)["type"] = ss->getDataType();
+    (*header)["md5sum"] = ss->getMD5Sum();
+    (*header)["message_definition"] = ss->getMessageDefinition();
+  }
+
   SerializedPayload payload;
   payload.vec.resize(ss->size());
   ros::serialization::OStream stream(payload.vec.data(), ss->size());
   ss->write(stream);   // copies the wire bytes only — no md5/datatype/def touched
 
-  queue->push(SnapshotMessage(payload, msg_event.getReceiptTime()));
+  queue->push(SnapshotMessage(std::move(payload), msg_event.getReceiptTime()), header);
   // ss goes out of scope here and its duplicated metadata strings are freed
 }
 
