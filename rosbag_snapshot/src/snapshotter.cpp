@@ -398,6 +398,7 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
     try
     {
       bag.open(req.filename, rosbag::bagmode::Write);
+      bag.setChunkThreshold(8 * 1024 * 1024);  // 8MB chunks, improve compression
     }
     catch (rosbag::BagException const& err)
     {
