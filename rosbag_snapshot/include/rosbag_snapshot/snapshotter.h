@@ -47,6 +47,7 @@
 #include <rosbag/macros.h>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <memory>
@@ -179,8 +180,6 @@ private:
 
 public:
   explicit MessageQueue(SnapshotterTopicOptions const& options);
-  // Add a new message to the internal queue if possible, truncating the front of the queue as needed to enforce limits
-  void push(SnapshotMessage const& msg);
   // Removes the message at the front of the queue (oldest) and returns it
   SnapshotMessage pop();
   // Returns the time difference between back and front of queue, or 0 if size <= 1
@@ -203,6 +202,7 @@ public:
   int64_t getConnectionHeaderSize() const;
 
   // Push a message and, if the queue has none yet, its connection header under a single lock acquisition
+  // Adds a new message to the internal queue if possible, truncating the front of the queue as needed to enforce limits
   void push(SnapshotMessage msg, boost::shared_ptr<ros::M_string> const& header);
 
 private:
