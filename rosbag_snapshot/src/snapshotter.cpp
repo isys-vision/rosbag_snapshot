@@ -240,13 +240,13 @@ void MessageQueue::_setConnectionHeader(boost::shared_ptr<ros::M_string> const& 
 
 void MessageQueue::_push(SnapshotMessage&& _out)
 {
-  int32_t size = _out.payload.size();
-  // If message cannot be added without violating limits, it must be dropped
-  if (!preparePush(size, _out.time))
-    return;
-
   // Compute the size first: the payload is moved out of _out below
   int64_t const msg_size = getMessageSize(_out);
+
+  // If message cannot be added without violating limits, it must be dropped
+  if (!preparePush(msg_size, _out.time))
+    return;
+
   queue_.push_back(std::move(_out));
 
   // Add size of new message to running count to maintain correctness
@@ -358,8 +358,9 @@ void Snapshotter::topicCB(const ros::MessageEvent<topic_tools::ShapeShifter cons
   SerializedPayload payload;
   payload.size_ = ss->size();
   payload.data = std::unique_ptr<uint8_t[]>(new uint8_t[payload.size_]);
-  // copies the wire bytes only — no md5/datatype/def touched
   ros::serialization::OStream stream(payload.data.get(), payload.size_);
+  // copies the wire bytes only — no md5/datatype/def touched
+  ss->write(stream);
 
   queue->push(SnapshotMessage(std::move(payload), msg_event.getReceiptTime()), header);
   // ss goes out of scope here and its duplicated metadata strings are freed
@@ -531,10 +532,23 @@ bool Snapshotter::triggerSnapshotCb(rosbag_snapshot_msgs::TriggerSnapshot::Reque
   {
     res.success = false;
     res.message = res.NO_DATA_MESSAGE;
-    return true;
+    ROS_WARN_STREAM("snapshot: " << res.message);
+  }
+  else
+  {
+    try
+    {
+      bag.close();
+      res.success = true;
+    }
+    catch (rosbag::BagException const& e)
+    {
+      res.success = false;
+      res.message = string("failed to close bag: ") + e.what();
+      ROS_WARN_STREAM("snapshot: " << res.message);
+    }
   }
 
-  res.success = true;
   return true;
 }
 
