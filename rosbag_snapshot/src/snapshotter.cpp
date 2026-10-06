@@ -190,12 +190,8 @@ bool MessageQueue::preparePush(int32_t size, ros::Time const& time)
 
 void MessageQueue::push(SnapshotMessage _out, boost::shared_ptr<ros::M_string> const& header)
 {
-  boost::mutex::scoped_try_lock l(lock);
-  if (!l.owns_lock())
-  {
-    ROS_ERROR("Failed to lock. Time %f", _out.time.toSec());
-    return;
-  }
+  boost::mutex::scoped_lock l(lock);
+
   _setConnectionHeader(header);
   _push(std::move(_out));
 }
