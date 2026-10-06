@@ -74,7 +74,10 @@ SnapshotterOptions::SnapshotterOptions(ros::Duration default_duration_limit, int
   , default_memory_limit_(default_memory_limit)
   , default_count_limit_(default_count_limit)
   , status_period_(status_period)
+  , all_topics_(false)
   , clear_buffer_(clear_buffer)
+  , compression_("uncompressed")
+  , queue_size_(10)
   , topics_()
 {
 }
