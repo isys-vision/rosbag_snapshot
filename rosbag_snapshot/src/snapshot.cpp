@@ -64,14 +64,14 @@ bool parseOptions(po::variables_map& vm, int argc, char** argv)
   // clang-format off
   desc.add_options()
     ("help,h", "produce help message")
-    ("trigger-write,t", "Write buffer of selected topcis to a bag file")
+    ("trigger-write,t", "Write buffer of selected topics to a bag file")
     ("pause,p", "Stop buffering new messages until resumed or write is triggered")
     ("resume,r", "Resume buffering new messages, writing over older messages as needed")
     ("all,a", "Record all topics")
     ("no-clear,n", "Flag to explicitly NOT clear the buffer after writing to a bag.")
     ("size,s", po::value<double>()->default_value(-1),
      "Maximum memory per topic to use in buffering in MB. Default: no limit")
-    ("count,c", po::value<int32_t>()->default_value(-1),
+    ("count", po::value<int32_t>()->default_value(-1),
      "Maximum number of messages per topic to use when buffering. Default: no limit")
     ("duration,d", po::value<double>()->default_value(30.0),
      "Maximum difference between newest and oldest buffered message per topic in seconds. Default: 30")
@@ -124,21 +124,12 @@ bool parseVariablesMap(SnapshotterOptions& opts, po::variables_map const& vm)
   opts.default_memory_limit_ = static_cast<int>(MB_TO_BYTES * vm["size"].as<double>());
   opts.default_duration_limit_ = ros::Duration(vm["duration"].as<double>());
   opts.default_count_limit_ =  vm["count"].as<int32_t>();
-  if (vm.count("no-clear"))
-  {
-    opts.clear_buffer_ = false;
-  }
-  else opts.clear_buffer_ = true;
+  opts.clear_buffer_ = !vm.count("no-clear");
+
   opts.all_topics_ = vm.count("all");
   opts.compression_ = vm["compression"].as<std::string>();
-  if (vm.count("queue-size"))
-  {
-    opts.queue_size_ = vm["queue-size"].as<int32_t>();
-  }
-  else
-  {
-    opts.queue_size_ = 10;
-  }
+  opts.queue_size_ = vm["queue-size"].as<int32_t>();
+
   return true;
 }
 
@@ -185,10 +176,9 @@ void appendParamOptions(ros::NodeHandle& nh, SnapshotterOptions& opts)
   nh.param("record_all_topics", opts.all_topics_, opts.all_topics_);
 
   // Set compression type
-  const std::string default_compression{"uncompressed"};
-  nh.param("compression", opts.compression_, default_compression);
+  nh.param("compression", opts.compression_, opts.compression_);
 
-  nh.param("queue_size", opts.queue_size_, 10);
+  nh.param("queue_size", opts.queue_size_, opts.queue_size_);
 
   if (!nh.getParam("topics", topics))
   {
@@ -233,7 +223,7 @@ void appendParamOptions(ros::NodeHandle& nh, SnapshotterOptions& opts)
           dur = ros::Duration(seconds, 0);
         }
         else
-          ROS_FATAL("err");
+          ROS_FATAL("error while parsing duration");
       }
       if (topic_config.hasMember("memory"))
       {
@@ -249,7 +239,7 @@ void appendParamOptions(ros::NodeHandle& nh, SnapshotterOptions& opts)
           mem = MB_TO_BYTES * mb;
         }
         else
-          ROS_FATAL("err");
+          ROS_FATAL("error while parsing memory");
       }
       if (topic_config.hasMember("count"))
       {
@@ -259,7 +249,7 @@ void appendParamOptions(ros::NodeHandle& nh, SnapshotterOptions& opts)
           cnt = cnt_limit;
         }
         else
-          ROS_FATAL("err");
+          ROS_FATAL("error while parsing count");
       }
       opts.addTopic(topic, dur, mem, cnt);
     }

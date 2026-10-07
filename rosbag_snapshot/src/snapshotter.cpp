@@ -34,7 +34,7 @@
 #include <queue>
 #include <string>
 #include <time.h>
-#include <vector>
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/scope_exit.hpp>
 #include <boost/thread/xtime.hpp>
@@ -74,7 +74,10 @@ SnapshotterOptions::SnapshotterOptions(ros::Duration default_duration_limit, int
   , default_memory_limit_(default_memory_limit)
   , default_count_limit_(default_count_limit)
   , status_period_(status_period)
+  , all_topics_(false)
   , clear_buffer_(clear_buffer)
+  , compression_("uncompressed")
+  , queue_size_(10)
   , topics_()
 {
 }
@@ -91,14 +94,24 @@ SnapshotterClientOptions::SnapshotterClientOptions() : action_(SnapshotterClient
 {
 }
 
-SnapshotMessage::SnapshotMessage(topic_tools::ShapeShifter::ConstPtr _msg,
-                                 boost::shared_ptr<ros::M_string> _connection_header, Time _time)
-  : msg(_msg), connection_header(_connection_header), time(_time)
+SnapshotMessage::SnapshotMessage(SerializedPayload _msg, Time _time)
+  : payload(std::move(_msg)), time(_time)
 {
 }
 
-MessageQueue::MessageQueue(SnapshotterTopicOptions const& options) : options_(options), size_(0)
+MessageQueue::MessageQueue(SnapshotterTopicOptions const& options)
+  : options_(options), size_(0), has_connection_header_(false)
 {
+}
+
+boost::shared_ptr<ros::M_string> const& MessageQueue::getConnectionHeader() const
+{
+  return connection_header_;
+}
+
+bool MessageQueue::hasConnectionHeader() const
+{
+  return has_connection_header_.load(std::memory_order_acquire);
 }
 
 void MessageQueue::setSubscriber(shared_ptr<ros::Subscriber> sub)
@@ -126,7 +139,8 @@ void MessageQueue::clear()
 void MessageQueue::_clear()
 {
   queue_.clear();
-  size_ = 0;
+
+  size_ = getConnectionHeaderSize();
 }
 
 ros::Duration MessageQueue::duration() const
@@ -176,15 +190,13 @@ bool MessageQueue::preparePush(int32_t size, ros::Time const& time)
 
   return true;
 }
-void MessageQueue::push(SnapshotMessage const& _out)
+
+void MessageQueue::push(SnapshotMessage _out, boost::shared_ptr<ros::M_string> const& header)
 {
-  boost::mutex::scoped_try_lock l(lock);
-  if (!l.owns_lock())
-  {
-    ROS_ERROR("Failed to lock. Time %f", _out.time.toSec());
-    return;
-  }
-  _push(_out);
+  boost::mutex::scoped_lock l(lock);
+
+  _setConnectionHeader(header);
+  _push(std::move(_out));
 }
 
 SnapshotMessage MessageQueue::pop()
@@ -195,28 +207,54 @@ SnapshotMessage MessageQueue::pop()
 
 int64_t MessageQueue::getMessageSize(SnapshotMessage const& snapshot_msg) const
 {
-  return snapshot_msg.msg->size() +
-         snapshot_msg.connection_header->size() +
-         snapshot_msg.msg->getDataType().size() +
-         snapshot_msg.msg->getMD5Sum().size() +
-         snapshot_msg.msg->getMessageDefinition().size() +
-         sizeof(SnapshotMessage);
+  return snapshot_msg.payload.size() + sizeof(SnapshotMessage);
 }
 
-void MessageQueue::_push(SnapshotMessage const& _out)
+int64_t MessageQueue::getConnectionHeaderSize() const
 {
-  int32_t size = _out.msg->size();
-  // If message cannot be added without violating limits, it must be dropped
-  if (!preparePush(size, _out.time))
+  if (!connection_header_)
+    return 0;
+
+  int64_t size = sizeof(*connection_header_);
+
+  for (const auto& field : *connection_header_)
+  {
+    size += field.first.size();
+    size += field.second.size();
+  }
+
+  return size;
+}
+// Caller must hold the queue lock
+void MessageQueue::_setConnectionHeader(boost::shared_ptr<ros::M_string> const& header)
+{
+  if (connection_header_ || !header)
     return;
-  queue_.push_back(_out);
+
+  connection_header_ = header;
+  has_connection_header_.store(true, std::memory_order_release);
+
+  size_ += getConnectionHeaderSize();
+}
+
+void MessageQueue::_push(SnapshotMessage&& _out)
+{
+  // Compute the size first: the payload is moved out of _out below
+  int64_t const msg_size = getMessageSize(_out);
+
+  // If message cannot be added without violating limits, it must be dropped
+  if (!preparePush(msg_size, _out.time))
+    return;
+
+  queue_.push_back(std::move(_out));
+
   // Add size of new message to running count to maintain correctness
-  size_ += getMessageSize(_out);
+  size_ += msg_size;
 }
 
 SnapshotMessage MessageQueue::_pop()
 {
-  SnapshotMessage tmp = queue_.front();
+  SnapshotMessage tmp = std::move(queue_.front());
   queue_.pop_front();
   //  Remove size of popped message to maintain correctness of size_
   size_ -= getMessageSize(tmp);
@@ -264,7 +302,7 @@ void Snapshotter::fixTopicOptions(SnapshotterTopicOptions& options)
   if (options.memory_limit_ == SnapshotterTopicOptions::INHERIT_MEMORY_LIMIT)
     options.memory_limit_ = options_.default_memory_limit_;
   if (options.count_limit_ == SnapshotterTopicOptions::INHERIT_COUNT_LIMIT)
-    options.count_limit_ = options_.default_memory_limit_;
+    options.count_limit_ = options_.default_count_limit_;
 }
 
 bool Snapshotter::postfixFilename(string& file)
@@ -302,9 +340,29 @@ void Snapshotter::topicCB(const ros::MessageEvent<topic_tools::ShapeShifter cons
     }
   }
 
-  // Pack message and metadata into SnapshotMessage holder
-  SnapshotMessage out(msg_event.getMessage(), msg_event.getConnectionHeaderPtr(), msg_event.getReceiptTime());
-  queue->push(out);
+  topic_tools::ShapeShifter::ConstPtr const& ss = msg_event.getMessage();
+
+  // The connection header is stored once per queue. The transport normally supplies it; if it is missing
+  // (e.g. intra-process publisher) build the minimal fields rosbag needs from the ShapeShifter, but only
+  // until the queue has a header, so the definition string is not copied for every message.
+  boost::shared_ptr<ros::M_string> header = msg_event.getConnectionHeaderPtr();
+  if (!header && !queue->hasConnectionHeader())
+  {
+    header = boost::make_shared<ros::M_string>();
+    (*header)["type"] = ss->getDataType();
+    (*header)["md5sum"] = ss->getMD5Sum();
+    (*header)["message_definition"] = ss->getMessageDefinition();
+  }
+
+  SerializedPayload payload;
+  payload.size_ = ss->size();
+  payload.data = std::unique_ptr<uint8_t[]>(new uint8_t[payload.size_]);
+  ros::serialization::OStream stream(payload.data.get(), payload.size_);
+  // copies the wire bytes only — no md5/datatype/def touched
+  ss->write(stream);
+
+  queue->push(SnapshotMessage(std::move(payload), msg_event.getReceiptTime()), header);
+  // ss goes out of scope here and its duplicated metadata strings are freed
 }
 
 void Snapshotter::subscribe(string const& topic, boost::shared_ptr<MessageQueue> queue)
@@ -339,6 +397,7 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
     try
     {
       bag.open(req.filename, rosbag::bagmode::Write);
+      bag.setChunkThreshold(8 * 1024 * 1024);  // 8MB chunks, improve compression
     }
     catch (rosbag::BagException const& err)
     {
@@ -349,12 +408,12 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
     ROS_INFO("Writing snapshot to %s", req.filename.c_str());
 
     // Setting compression type
-    if (options_.compression_ == "LZ4")
+    if (boost::iequals(options_.compression_, "LZ4"))
     {
       ROS_INFO("Bag compression type LZ4");
       bag.setCompression(rosbag::compression::LZ4);
     }
-    else if (options_.compression_ == "BZ2")
+    else if (boost::iequals(options_.compression_, "BZ2"))
     {
       ROS_INFO("Bag compression type BZ2");
       bag.setCompression(rosbag::compression::BZ2);
@@ -371,13 +430,18 @@ bool Snapshotter::writeTopic(rosbag::Bag& bag, MessageQueue& message_queue, stri
     for (MessageQueue::range_t::first_type msg_it = range.first; msg_it != range.second; ++msg_it)
     {
       SnapshotMessage const& msg = *msg_it;
-      bag.write(topic, msg.time, msg.msg, msg.connection_header);
+      bag.write(
+          topic,
+          msg.time,
+          msg.payload,
+          message_queue.getConnectionHeader());
     }
   }
   catch (rosbag::BagException const& err)
   {
     res.success = false;
     res.message = string("failed to write bag: ") + err.what();
+    return false;
   }
   return true;
 }
@@ -468,10 +532,23 @@ bool Snapshotter::triggerSnapshotCb(rosbag_snapshot_msgs::TriggerSnapshot::Reque
   {
     res.success = false;
     res.message = res.NO_DATA_MESSAGE;
-    return true;
+    ROS_WARN_STREAM("snapshot: " << res.message);
+  }
+  else
+  {
+    try
+    {
+      bag.close();
+      res.success = true;
+    }
+    catch (rosbag::BagException const& e)
+    {
+      res.success = false;
+      res.message = string("failed to close bag: ") + e.what();
+      ROS_WARN_STREAM("snapshot: " << res.message);
+    }
   }
 
-  res.success = true;
   return true;
 }
 
