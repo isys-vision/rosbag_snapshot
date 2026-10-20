@@ -216,7 +216,7 @@ private:
   void _clear();
   // Truncate front of queue as needed to fit a new message of specified size and time. Returns False if this is
   // impossible.
-  bool preparePush(int32_t size, ros::Time const& time);
+  bool preparePush(int64_t size, ros::Time const& time);
 };
 
 /* Snapshotter node. Maintains a circular buffer of the most recent messages from configured topics
@@ -317,20 +317,33 @@ private:
 }  // namespace rosbag_snapshot
 
 
-namespace ros { namespace message_traits {
+namespace ros
+{
+namespace message_traits
+{
 // Wildcard traits, same trick topic_tools::ShapeShifter uses, so Bag::write<T>
 // compiles. Values are never read at runtime once a topic's connection_info
 // exists, and MessageQueue::connection_header_ supplies the real ones anyway.
 template<> struct MD5Sum<rosbag_snapshot::SerializedPayload>
-{ static const char* value(const rosbag_snapshot::SerializedPayload&) { return "*"; } };
+{
+  static const char* value(const rosbag_snapshot::SerializedPayload&) { return "*"; }
+};
 template<> struct DataType<rosbag_snapshot::SerializedPayload>
-{ static const char* value(const rosbag_snapshot::SerializedPayload&) { return "*"; } };
+{
+  static const char* value(const rosbag_snapshot::SerializedPayload&) { return "*"; }
+};
 template<> struct Definition<rosbag_snapshot::SerializedPayload>
-{ static const char* value(const rosbag_snapshot::SerializedPayload&) { return ""; } };
-}}
+{
+  static const char* value(const rosbag_snapshot::SerializedPayload&) { return ""; }
+};
+}  // namespace message_traits
+}  // namespace ros
 
 
-namespace ros { namespace serialization {
+namespace ros
+{
+namespace serialization
+{
 template<> struct Serializer<rosbag_snapshot::SerializedPayload>
 {
   template<typename Stream>
@@ -339,6 +352,7 @@ template<> struct Serializer<rosbag_snapshot::SerializedPayload>
   inline static uint32_t serializedLength(rosbag_snapshot::SerializedPayload const& m)
   { return m.size(); }
 };
-}}
+}  // namespace serialization
+}  // namespace ros
 
 #endif  // ROSBAG_SNAPSHOT_SNAPSHOTTER_H

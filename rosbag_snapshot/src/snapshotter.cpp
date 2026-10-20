@@ -151,7 +151,7 @@ ros::Duration MessageQueue::duration() const
   return queue_.back().time - queue_.front().time;
 }
 
-bool MessageQueue::preparePush(int32_t size, ros::Time const& time)
+bool MessageQueue::preparePush(int64_t size, ros::Time const& time)
 {
   // If new message is older than back of queue, time has gone backwards and buffer must be cleared
   if (!queue_.empty() && time < queue_.back().time)
