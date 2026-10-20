@@ -1,0 +1,26 @@
+<launch>
+  <!-- rostest rosbag_snapshot write_perf.test bag:=/data/big.bag compression:=LZ4 -->
+  <!-- arg name="bag"         default="$(optenv SNAPSHOT_TEST_BAG)"/ -->
+  <arg name="bag"         default="$(find rosbag_snapshot)/test/data/snapshot.bag"/>
+  <arg name="compression" default="lz4"/>   <!-- uncompressed | LZ4 | BZ2 -->
+  <arg name="out_dir"     default="/tmp"/>           <!-- put this on the disk you want to measure -->
+  <arg name="repeats"     default="5"/>
+
+  <!-- No topics given => the node discovers and subscribes to all published topics. -->
+  <node name="snapshot" pkg="rosbag_snapshot" type="snapshot" output="screen">
+    <rosparam subst_value="true">
+      default_duration_limit: -1   # never evict by age
+      default_memory_limit: -1     # never evict by size
+      clear_buffer: false          # keep the buffer so we can write it several times
+      compression: $(arg compression)
+      record_all_topics: true
+      queue_size: 1000
+    </rosparam>
+  </node>
+
+  <test test-name="write_perf" pkg="rosbag_snapshot" type="test_write_perf" time-limit="600.0">
+    <param name="bag"     value="$(arg bag)"/>
+    <param name="out_dir" value="$(arg out_dir)"/>
+    <param name="repeats" value="$(arg repeats)"/>
+  </test>
+</launch>

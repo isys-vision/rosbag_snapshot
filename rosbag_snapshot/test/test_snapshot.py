@@ -162,7 +162,7 @@ class TestRosbagSnapshot(unittest.TestCase):
         # Oneliners :)
         status_topics = [rospy.resolve_name(list(topic.keys())[0] if type(topic) == dict else topic)
                          for topic in self.params['topics']]
-        self.assertEquals(set(topics), set(status_topics))  # Topics from params are same as topics in status message
+        self.assertEqual(set(topics), set(status_topics))  # Topics from params are same as topics in status message
         for topic in self.last_status.topics:
             duration = topic.window_stop - topic.window_start
             memory = topic.traffic
@@ -180,12 +180,21 @@ class TestRosbagSnapshot(unittest.TestCase):
         param_topics = set(self.topic_limits.keys())
         if topics:
             self.assertEqual(bag_topics, set(topics))
+            if "/test2" in topics:
+                saw_test2_value = False
         self.assertTrue(bag_topics.issubset(param_topics))
         for topic in topics_dict:
             size = topics_dict[topic].message_count * 8  # Calculate stored message size as each message is 8 bytes
             count = topics_dict[topic].message_count
             gen = bag.read_messages(topics=topic)
-            _, _, first_time = next(gen)
+            t, m, first_time = next(gen)
+
+            # validate bag content msg.data == 1337 on /test2
+            if topic == "/test2":
+                self.assertEqual(m.data, 1337)
+                self.assertEqual(t, topic)
+                saw_test2_value = True
+
             last_time = first_time  # in case the next for loop does not execute
             if start_time:
                 self.assertGreaterEqual(first_time, start_time)
@@ -195,6 +204,9 @@ class TestRosbagSnapshot(unittest.TestCase):
                 self.assertLessEqual(last_time, stop_time)
             duration = last_time - first_time
             self._assert_limits_enforced(topic, duration, size, count)
+
+        if topics and "/test2" in topics:
+            self.assertTrue(saw_test2_value)
 
     def test_1_service_connects(self):
         '''
