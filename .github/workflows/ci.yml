@@ -1,0 +1,116 @@
+# GitHub Actions CI for rosbag_snapshot (ROS 1 / catkin)
+#
+# Repo layout: this repo root contains the catkin packages
+#   rosbag_snapshot/       (this package)
+#   rosbag_snapshot_msgs/  (sibling package, built automatically)
+#
+# The whole repo is copied into a fresh catkin workspace as src/rosbag_snapshot,
+# so both packages are picked up by catkin build / catkin test.
+
+name: catkin build & test
+
+# Runs on both branch pushes and PRs
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# the ros:noetic container defaults to sh (dash), which has no `source` builtin
+# — run all steps with bash instead
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    if: github.event_name != 'push' || !contains(github.ref, 'refs/pull/')
+    name: catkin build (noetic)
+    runs-on: ubuntu-22.04
+    container: ros:noetic
+    env:
+      WORKSPACE: ${{ github.workspace }}/catkin_ws
+      # rostest needs a writable HOME for ros logs
+      HOME: /tmp
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up catkin workspace
+        run: |
+          mkdir -p "$WORKSPACE/src"
+          # copy only the catkin packages (not .git/.github, and not catkin_ws itself)
+          cp -r "$GITHUB_WORKSPACE"/rosbag_snapshot "$WORKSPACE/src/"
+          cp -r "$GITHUB_WORKSPACE"/rosbag_snapshot_msgs "$WORKSPACE/src/"
+          source /opt/ros/noetic/setup.bash
+          apt-get update
+          apt-get install -y python3-catkin-tools
+          rosdep update --rosdistro=noetic
+          rosdep install --from-paths "$WORKSPACE/src" --ignore-src -y
+
+      - name: catkin build
+        run: |
+          source /opt/ros/noetic/setup.bash
+          catkin config --init
+          catkin build --no-status --summarize
+        working-directory: ${{ github.workspace }}/catkin_ws
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build
+          path: |
+            catkin_ws/build/
+            catkin_ws/devel/
+          retention-days: 1
+
+  test:
+    name: catkin test (noetic)
+    runs-on: ubuntu-22.04
+    container: ros:noetic
+    needs: build
+    env:
+      WORKSPACE: ${{ github.workspace }}/catkin_ws
+      HOME: /tmp
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up catkin workspace
+        run: |
+          mkdir -p "$WORKSPACE/src"
+          # copy only the catkin packages (not .git/.github, and not catkin_ws itself)
+          cp -r "$GITHUB_WORKSPACE"/rosbag_snapshot "$WORKSPACE/src/"
+          cp -r "$GITHUB_WORKSPACE"/rosbag_snapshot_msgs "$WORKSPACE/src/"
+          source /opt/ros/noetic/setup.bash
+          apt-get update
+          apt-get install -y python3-catkin-tools
+          rosdep update --rosdistro=noetic
+          rosdep install --from-paths "$WORKSPACE/src" --ignore-src -y
+
+      - name: catkin build
+        run: |
+          source /opt/ros/noetic/setup.bash
+          catkin config --init
+          catkin build --no-status --summarize
+        working-directory: ${{ github.workspace }}/catkin_ws
+
+      - name: catkin test
+        run: |
+          source "$WORKSPACE/devel/setup.bash"
+          # runs rostest suites declared in CMakeLists.txt:
+          #   snapshot.test   (test_snapshot.py)
+          #   write_perf.test (test_write_perf gtest, ~2-3 min with the small snapshot.bag)
+          catkin run_tests rosbag_snapshot --no-status
+          catkin_test_results "$WORKSPACE/build/rosbag_snapshot" || exit 1
+        working-directory: ${{ github.workspace }}/catkin_ws
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: catkin_ws/build/rosbag_snapshot/test_results/
+          retention-days: 7
