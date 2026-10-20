@@ -46,6 +46,7 @@
 #include <rosbag/stream.h>
 #include <rosbag_snapshot_msgs/SnapshotStatus.h>
 #include <rosbag_snapshot/snapshotter.h>
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -263,19 +264,20 @@ SnapshotMessage MessageQueue::_pop()
 
 MessageQueue::range_t MessageQueue::rangeFromTimes(Time const& start, Time const& stop)
 {
-  range_t::first_type begin = queue_.begin();
-  range_t::second_type end = queue_.end();
+  queue_t::const_iterator begin = queue_.begin();
+  queue_t::const_iterator end = queue_.end();
 
-  // Increment / Decrement iterators until time contraints are met
+  // The queue is time-ordered, so binary search for the bounds
   if (!start.isZero())
   {
-    while (begin != end && (*begin).time < start)
-      ++begin;
+    begin = std::lower_bound(begin, end, start,
+      [](SnapshotMessage const& m, Time const& t) { return m.time < t; });
   }
   if (!stop.isZero())
   {
-    while (end != begin && (*(end - 1)).time > stop)
-      --end;
+    // Searching from begin guarantees end >= begin, even if start > stop
+    end = std::upper_bound(begin, end, stop,
+      [](Time const& t, SnapshotMessage const& m) { return t < m.time; });
   }
   return range_t(begin, end);
 }
